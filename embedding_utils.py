@@ -19,6 +19,7 @@ __all__ = [
     "embed_texts",
     "project_2d",
     "compare_models",
+    "compare_many",
     "plot_embedding_space",
     "similarity_heatmap",
 ]
@@ -81,21 +82,51 @@ def _hover_bio(text):
     return "<br>".join(textwrap.wrap(text, width=55))
 
 
-def _label_positions(xy):
-    """Put each label on the side facing away from its nearest neighbour, so close points don't stack labels."""
+def _label_layout(items, xy):
+    """Selective direct labels so the map stays readable.
+
+    Labels are placed greedily, most-isolated point first, preferring the side away
+    from the nearest neighbour. A name whose label box would overlap an already
+    placed one stays hover-only (every point always has its name on hover).
+    """
     span = xy.max(axis=0) - xy.min(axis=0)
     norm = (xy - xy.min(axis=0)) / np.where(span == 0, 1, span)
-    positions = []
-    for i in range(len(norm)):
+    n = len(norm)
+    nearest, nearest_dist = np.zeros(n, dtype=int), np.zeros(n)
+    for i in range(n):
         distances = np.linalg.norm(norm - norm[i], axis=1)
         distances[i] = np.inf
-        nearest = int(np.argmin(distances))
-        positions.append("bottom center" if norm[nearest, 1] > norm[i, 1] else "top center")
-    return positions
+        nearest[i] = int(np.argmin(distances))
+        nearest_dist[i] = distances[nearest[i]]
+
+    # approximate label footprints in normalized data units (11px font on a ~840px panel)
+    char_w, label_h, gap = 0.0075, 0.05, 0.018
+    placed = []
+
+    def label_box(i, side):
+        half_w = char_w * len(items[i]["name"]) / 2
+        x, y = norm[i]
+        y0 = y + gap if side == "top" else y - gap - label_h
+        return (x - half_w, x + half_w, y0, y0 + label_h)
+
+    def collides(box):
+        return any(box[0] < p[1] and p[0] < box[1] and box[2] < p[3] and p[2] < box[3] for p in placed)
+
+    texts, positions = [""] * n, ["top center"] * n
+    for i in sorted(range(n), key=lambda k: -nearest_dist[k]):  # most isolated first
+        away = "bottom" if norm[nearest[i], 1] > norm[i, 1] + 1e-9 else "top"
+        for side in (away, "bottom" if away == "top" else "top"):
+            box = label_box(i, side)
+            if not collides(box):
+                texts[i] = items[i]["name"]
+                positions[i] = side + " center"
+                placed.append(box)
+                break
+    return texts, positions
 
 
 def _scatter_traces(items, xy, colors, showlegend):
-    positions = _label_positions(xy)
+    texts, positions = _label_layout(items, xy)
     traces = []
     for group, color in colors.items():
         idx = [i for i, item in enumerate(items) if item["group"] == group]
@@ -107,13 +138,13 @@ def _scatter_traces(items, xy, colors, showlegend):
                 name=group,
                 legendgroup=group,
                 showlegend=showlegend,
-                text=[items[i]["name"] for i in idx],
+                text=[texts[i] for i in idx],
                 textposition=[positions[i] for i in idx],
                 textfont=dict(color=_INK, size=11),
                 cliponaxis=False,
                 marker=dict(color=color, size=11, line=dict(color=_SURFACE, width=2)),
-                customdata=[_hover_bio(items[i]["text"]) for i in idx],
-                hovertemplate="<b>%{text}</b><br><br>%{customdata}<extra>" + group + "</extra>",
+                customdata=[[items[i]["name"], _hover_bio(items[i]["text"])] for i in idx],
+                hovertemplate="<b>%{customdata[0]}</b><br><br>%{customdata[1]}<extra>" + group + "</extra>",
             )
         )
     return traces
@@ -161,6 +192,41 @@ def compare_models(items, model_a, model_b, method="pca"):
         for trace in _scatter_traces(items, xy, colors, showlegend=(col == 1)):
             fig.add_trace(trace, row=1, col=col)
     _style_scatter_layout(fig, f"Same texts, two world views ({method.upper()} projection — only distances matter)", height=560)
+    for annotation in fig.layout.annotations:  # subplot titles
+        annotation.font = dict(color=_INK, size=13, family=_FONT)
+    return fig
+
+
+def compare_many(items, models, method="pca", cols=2):
+    """Same texts through several models' eyes, laid out in a grid.
+
+    A generalisation of ``compare_models`` to N models — pass a list of model
+    names and each gets its own 2D world map. ``cols`` controls the grid width.
+    """
+    _validate_items(items)
+    if len(models) < 1:
+        raise ValueError("pass at least one model name in `models`")
+    colors = _group_colors(items)
+    texts = [item["text"] for item in items]
+    cols = max(1, min(cols, len(models)))
+    rows = -(-len(models) // cols)  # ceil division
+    fig = make_subplots(
+        rows=rows,
+        cols=cols,
+        subplot_titles=[m.split("/")[-1] for m in models],
+        horizontal_spacing=0.06,
+        vertical_spacing=0.12 if rows > 1 else 0.0,
+    )
+    for idx, model_name in enumerate(models):
+        row, col = idx // cols + 1, idx % cols + 1
+        xy = project_2d(embed_texts(model_name, texts), method=method)
+        for trace in _scatter_traces(items, xy, colors, showlegend=(idx == 0)):
+            fig.add_trace(trace, row=row, col=col)
+    _style_scatter_layout(
+        fig,
+        f"Same texts, {len(models)} world views ({method.upper()} projection — only distances matter)",
+        height=300 * rows + 120,
+    )
     for annotation in fig.layout.annotations:  # subplot titles
         annotation.font = dict(color=_INK, size=13, family=_FONT)
     return fig

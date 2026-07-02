@@ -1,6 +1,6 @@
 # scai_team — How does a model see the world?
 
-A ~5-minute workshop notebook: short text bios (the data team, cartoon characters, politicians) are embedded by **two small Hugging Face models** and displayed in 2D embedding space — two different world views of the same texts. Run it, look, then edit the texts and watch the maps change.
+A ~5-minute workshop notebook: short text bios (the SCAI team, cartoon characters, politicians) are embedded by **two small Hugging Face models** and displayed in 2D embedding space — two different world views of the same texts. Run it, look, then edit the texts and watch the maps change.
 
 **▶️ Open the notebook in Colab:**
 
