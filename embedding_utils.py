@@ -9,6 +9,7 @@ Expected data shape: a list of items, each item a dict with exactly these keys:
 import textwrap
 
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from sentence_transformers import SentenceTransformer
@@ -22,11 +23,13 @@ __all__ = [
     "compare_many",
     "plot_embedding_space",
     "similarity_heatmap",
+    "nearest_neighbors",
 ]
 
 # --- chart style (validated palette; groups get hues in fixed order) ---------
 _GROUP_COLORS = ["#2a78d6", "#1baf7a", "#eda100", "#008300", "#4a3aa7", "#e34948", "#e87ba4", "#eb6834"]
-_HEATMAP_RAMP = [(0.0, "#cde2fb"), (0.25, "#9ec5f4"), (0.5, "#5598e7"), (0.75, "#256abf"), (1.0, "#0d366b")]
+# ends mid-blue so the printed scores stay readable in the darkest cells
+_HEATMAP_RAMP = [(0.0, "#cde2fb"), (0.33, "#9ec5f4"), (0.66, "#6da7ec"), (1.0, "#3987e5")]
 _SURFACE = "#fcfcfb"
 _INK = "#0b0b0b"
 _MUTED = "#898781"
@@ -248,6 +251,8 @@ def similarity_heatmap(items, model_name):
             zmax=1.0,
             xgap=2,
             ygap=2,
+            texttemplate="%{z:.2f}",
+            textfont=dict(size=9 if len(items) <= 12 else 7, color=_INK, family=_FONT),
             hovertemplate="<b>%{y}</b> × <b>%{x}</b><br>similarity: %{z:.2f}<extra></extra>",
             colorbar=dict(title="cosine sim.", outlinewidth=0, tickfont=dict(color=_MUTED)),
         )
@@ -264,3 +269,20 @@ def similarity_heatmap(items, model_name):
     fig.update_yaxes(autorange="reversed", tickfont=dict(color=_INK))
     fig.update_xaxes(tickfont=dict(color=_INK))
     return fig
+
+
+def nearest_neighbors(items, *model_names):
+    """Ask each model directly: for every text, which other text is its closest twin?"""
+    _validate_items(items)
+    if not model_names:
+        raise ValueError("pass at least one model name, e.g. nearest_neighbors(items, MODEL_A, MODEL_B)")
+    names = [item["name"] for item in items]
+    columns = {}
+    for model_name in model_names:
+        embeddings = embed_texts(model_name, [item["text"] for item in items])
+        similarity = np.array(embeddings @ embeddings.T, dtype=float)
+        np.fill_diagonal(similarity, -np.inf)
+        columns[model_name.split("/")[-1]] = [
+            f"{names[int(np.argmax(row))]}  ({row.max():.2f})" for row in similarity
+        ]
+    return pd.DataFrame(columns, index=pd.Index(names, name="closest twin, according to →"))
